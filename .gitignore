@@ -1,6 +1,11 @@
 *.env
 *.jpg
 *.png
+*.jpeg
+*.webp
+*.mp4
+*.gif
+*.jiff
 *.exe
 .vscode
 __pycache__
