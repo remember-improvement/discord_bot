@@ -1,0 +1,5 @@
+*.env
+*.jpg
+*.exe
+.vscode
+__pycache__
