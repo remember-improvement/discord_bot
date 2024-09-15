@@ -612,10 +612,10 @@ def get_recommend_restaurant(address):
 
 def get_recommend_track(user_id):
     db = DiscordDatabaseManager()
-    results = db.get_most_message_thread(user_id,10)
+    results = db.get_most_message_thread(user_id,5)
     threads = [row[0] for row in results]  # Thread names
     weights = [row[1] for row in results]  # Message counts as weights
-    artist = random.choices(threads, weights=weights, k=1)[0]
+    artist = random.choice(threads)
     print(artist)
     if artist == "IVE-「真」好DIVE的窩":
         artist = "IVE"
@@ -627,6 +627,8 @@ def get_recommend_track(user_id):
         artist = "Honkai:Star Rail"
     elif artist == "捕夢網":
         artist = "Dreamcatcher"
+    elif artist == "機器人測試區":
+        artist = "五月天"
     result = get_random_popular_track(artist)
     if result is None:
         return None
@@ -908,7 +910,7 @@ def main():
                     message_input.send_keys(Keys.RETURN)
                 else:
                     artist, track_name, track_url = result
-                    message_input.send_keys(f"@{user_tag_name} 這邊推薦您 {artist} 的 {track_name}s，希望您會喜歡")
+                    message_input.send_keys(f"@{user_tag_name} 這邊推薦您 {artist} 的 {track_name}，希望您會喜歡")
                     message_input.send_keys(Keys.SHIFT,Keys.RETURN)
                     message_input.send_keys("      (Spotify 優越專用)      ")
                     message_input.send_keys(Keys.SHIFT,Keys.RETURN)

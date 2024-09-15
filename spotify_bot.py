@@ -67,7 +67,7 @@ def get_all_tracks_from_artist(artist_id, access_token):
     # Get all albums from the artist
     album_url = f"https://api.spotify.com/v1/artists/{artist_id}/albums"
     album_params = {
-        "limit": 5,  # Get up to 50 albums
+        "limit": 10,  # Get up to 50 albums
         "include_groups": "album,single"
     }
     response = requests.get(album_url, headers=headers, params=album_params)
@@ -129,7 +129,8 @@ def get_random_popular_track(artist_name):
     all_tracks = get_all_tracks_from_artist(artist_id, access_token)
     
     if all_tracks:
-        random_track = random.choice(all_tracks)
+        random.shuffle(all_tracks)
+        random_track = all_tracks.pop()
         track_name = random_track['name']
         track_url = random_track['external_urls']['spotify']
         return track_name, track_url
