@@ -137,6 +137,9 @@ def main():
             except exceptions.NoSuchElementException as e:
                 print("no such username element, continue")
                 continue
+            except exceptions.StaleElementReferenceException as e:
+                print(f"stale username element error {e}, continue")
+                continue
             
             
             user_record_exists = db.check_record_exists("user","user_id",user_tag_name)
