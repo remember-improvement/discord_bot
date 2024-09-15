@@ -13,6 +13,7 @@ import os
 import re
 import random
 from food_recommend import get_coordinates, recommend
+from spotify_bot import get_random_popular_track
 import mysql.connector
 from mysql.connector import Error
 from selenium.common import exceptions
@@ -238,7 +239,7 @@ class DiscordDatabaseManager:
             print(f"Get user dream context count error: {e}")
             return None
 
-    def get_most_message_thread(self, user_id):
+    def get_most_message_thread(self, user_id, size):
         try:
             cursor = self.connection.cursor()
             query = """
@@ -258,9 +259,9 @@ class DiscordDatabaseManager:
                         t.thread
                     ORDER BY 
                         message_count DESC
-                    LIMIT 3;
+                    LIMIT %s;
                   """
-            cursor.execute(query, (user_id,))
+            cursor.execute(query, (user_id,size))
             result = cursor.fetchall()
             return result
         except Error as e:
@@ -469,7 +470,7 @@ def fortune_teller(driver, message, message_input):
     except Error as e:
         print(f"db execute log fortune error : {e}")
     try:
-        results = db.get_most_message_thread(user_tag_name)
+        results = db.get_most_message_thread(user_tag_name,3)
         threads = [row[0] for row in results]  # Thread names
         weights = [row[1] for row in results]  # Message counts as weights
         thread = random.choices(threads, weights=weights, k=1)[0]
@@ -607,6 +608,31 @@ def get_recommend_restaurant(address):
         recommend_restaurant = random.choice(restaurant_list)
         print(address_dict[recommend_restaurant])
         return recommend_restaurant, address_dict[recommend_restaurant]
+
+
+def get_recommend_track(user_id):
+    db = DiscordDatabaseManager()
+    results = db.get_most_message_thread(user_id,10)
+    threads = [row[0] for row in results]  # Thread names
+    weights = [row[1] for row in results]  # Message counts as weights
+    artist = random.choices(threads, weights=weights, k=1)[0]
+    print(artist)
+    if artist == "IVE-「真」好DIVE的窩":
+        artist = "IVE"
+    elif artist == "SSS.jpg交易串":
+        artist = "tripleS"
+    elif artist == "好Bunnis的窩":
+        artist = "NewJeans"
+    elif artist == "鐵豚":
+        artist = "Honkai:Star Rail"
+    elif artist == "捕夢網":
+        artist = "Dreamcatcher"
+    result = get_random_popular_track(artist)
+    if result is None:
+        return None
+    else:
+        track_name, track_url = result
+        return artist ,track_name, track_url
 
 
 def navigate_to_reply_post_message(driver,serial_number):
@@ -872,6 +898,23 @@ def main():
             if message_text == "!今日運勢":
                 fortune_teller(driver, message, message_input)
             
+            elif message_text == "!song":
+                user_tag_name = get_message_tag_name(driver,message)
+                if user_tag_name is None:
+                    user_tag_name = get_original_poster_tag_name(driver)
+                result = get_recommend_track(user_tag_name)
+                if result is None:
+                    message_input.send_keys("找不到適合你的歌，ㄏ")
+                    message_input.send_keys(Keys.RETURN)
+                else:
+                    artist, track_name, track_url = result
+                    message_input.send_keys(f"@{user_tag_name} 這邊推薦您 {artist} 的 {track_name}s，希望您會喜歡")
+                    message_input.send_keys(Keys.SHIFT,Keys.RETURN)
+                    message_input.send_keys("      (Spotify 優越專用)      ")
+                    message_input.send_keys(Keys.SHIFT,Keys.RETURN)
+                    message_input.send_keys(f"{track_url}")
+                    message_input.send_keys(Keys.RETURN)
+
             elif message_text == "!亂源":
                 top_users = db.get_top_user_in_thread(thread_name,3)
                 total_message_count = db.get_message_count_from_thread(thread_name)
