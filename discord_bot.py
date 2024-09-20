@@ -17,361 +17,11 @@ from spotify_bot import get_random_popular_track
 import mysql.connector
 from mysql.connector import Error
 from selenium.common import exceptions
+from database_manager import DiscordDatabaseManager
+from datetime import datetime,timedelta
 from dotenv import load_dotenv
 load_dotenv()
-class DiscordDatabaseManager:
-    def __init__(self):
-        self.connection = self.database_setup()
 
-    def database_setup(self):
-        connection = mysql.connector.connect(
-            host=os.getenv("db_host"),
-            user=os.getenv("db_user"),
-            password=os.getenv("db_password"),
-            database=os.getenv("db_name")
-        )
-        try:
-            if connection.is_connected():
-                return connection
-        except Error as e:
-            print(f"Database connection error: {e}")
-            return None
-
-    def check_record_exists(self, table_name, column_name, value):
-        try:
-            cursor = self.connection.cursor()
-            query = f"SELECT EXISTS(SELECT 1 FROM {table_name} WHERE {column_name} = %s)"
-            cursor.execute(query, (value,))
-            exists = cursor.fetchone()[0]
-            return exists
-        except Error as err:
-            print(f"Check record exists error: {err}")
-            return False
-    def log_message_history(self,user,thread,message_text,emoji,serial_number):
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute("SELECT id FROM `discord`.`user` WHERE user_id = %s", (user,))
-            user_id = cursor.fetchone()
-            cursor.execute("SELECT id FROM `discord`.`thread` WHERE thread = %s", (thread,))
-            thread_id = cursor.fetchone()
-            if user_id and thread_id:
-                query = """
-                        INSERT INTO `discord`.`message_log` (`user_id`, `thread_id`, `message`, `emoji`, `serial_number`)
-                        VALUES (%s, %s, %s, %s, %s);
-                        """
-                
-            else:
-                raise Error
-            cursor.execute(query, (user_id[0], thread_id[0], message_text, emoji, serial_number))
-            self.connection.commit()
-        
-        
-        except Error as err:
-            print(f"log message history Error: {err}")
-
-    def log_user_info(self, user_id, user_name):
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                "INSERT INTO `discord`.`user` (`user_id`, `user_name`) VALUES (%s, %s);",
-                (user_id, user_name)
-            )
-            self.connection.commit()
-        except Error as err:
-            self.connection.rollback()
-            print(f"Log user info error: {err}")
-
-    def update_user_info(self, user_id, user_name):
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                "UPDATE `discord`.`user` SET `user_name` = %s WHERE `user_id` = %s;",
-                (user_name, user_id)
-            )
-            self.connection.commit()
-        except Error as err:
-            self.connection.rollback()
-            print(f"Update user info error: {err}")
-
-    def log_fortune_history(self, user_id, fortune_level):
-        try:
-            cursor = self.connection.cursor()
-            query = """
-                INSERT INTO `discord`.`fortune_log` (`user_id`, `fortune_level_id`)
-                SELECT u.id, fl.id
-                FROM `discord`.`user` u
-                JOIN `discord`.`fortune_level` fl
-                ON u.id = (SELECT id FROM `discord`.`user` WHERE user_id = %s)
-                AND fl.id = (SELECT id FROM `discord`.`fortune_level` WHERE level = %s);
-                """
-            cursor.execute(query, (user_id, fortune_level))
-            self.connection.commit()
-        except Error as err:
-            self.connection.rollback()
-            print(f"Log fortune history error: {err}")
-
-    def get_fortune_level_count(self, user_id):
-        try:
-            cursor = self.connection.cursor()
-            query = """
-                SELECT 
-                    fr.level AS fortune_level, 
-                    COUNT(*) AS count
-                FROM 
-                    discord.fortune_log fl
-                JOIN 
-                    discord.fortune_level fr ON fl.fortune_level_id = fr.id
-                WHERE 
-                    fl.user_id = (
-                        SELECT id 
-                        FROM discord.user 
-                        WHERE user_id = %s
-                    )
-                    AND fl.fortune_level_id IN (1, 2, 3, 4, 5)
-                GROUP BY 
-                    fl.fortune_level_id, fr.level;
-                """
-            cursor.execute(query, (user_id,))
-            results = cursor.fetchall()
-            return results
-        except Error as e:
-            print(f"Get fortune level count error: {e}")
-            return []
-    def get_user_recap(self, user_id):
-        try:
-            cursor = self.connection.cursor()
-            query = """
-                       SELECT 
-                        COUNT(ml.id) AS message_count,  -- Total message count for the user
-
-                        (SELECT emoji 
-                        FROM discord.message_log 
-                        WHERE emoji IS NOT NULL 
-                        AND user_id = u.id 
-                        AND created_time >= NOW() - INTERVAL 1 MONTH  -- Filter for the past month
-                        GROUP BY emoji 
-                        ORDER BY COUNT(*) DESC 
-                        LIMIT 1) AS most_popular_emoji,  -- Most popular emoji for the user
-
-                        (SELECT t.thread -- Retrieve the thread name
-                        FROM discord.message_log ml2
-                        JOIN discord.thread t ON ml2.thread_id = t.id
-                        WHERE ml2.thread_id IS NOT NULL 
-                        AND ml2.user_id = u.id 
-                        AND ml2.created_time >= NOW() - INTERVAL 1 MONTH  -- Filter for the past month
-                        GROUP BY ml2.thread_id 
-                        ORDER BY COUNT(*) DESC 
-                        LIMIT 1) AS most_popular_thread,  -- Most popular thread name for the user
-
-                        (SELECT COUNT(*) 
-                        FROM discord.message_log ml3
-                        WHERE ml3.thread_id = (SELECT thread_id 
-                                                FROM discord.message_log ml4
-                                                WHERE ml4.thread_id IS NOT NULL 
-                                                AND ml4.user_id = u.id 
-                                                AND ml4.created_time >= NOW() - INTERVAL 1 MONTH  -- Filter for the past month
-                                                GROUP BY ml4.thread_id 
-                                                ORDER BY COUNT(*) DESC 
-                                                LIMIT 1) 
-                        AND ml3.user_id = u.id) AS message_count_in_popular_thread,  -- Message count in the most popular thread
-
-                        (SELECT COUNT(*)
-                        FROM discord.message_log ml5
-                        WHERE ml5.user_id = u.id 
-                        AND ml5.created_time >= NOW() - INTERVAL 1 MONTH  -- Filter for the past month
-                        AND ml5.emoji IS NOT NULL) AS emoji_count  -- Count of emojis for the user
-
-                        
-                    FROM discord.message_log ml
-                    JOIN discord.user u ON ml.user_id = u.id
-                    WHERE u.user_id = %s
-                    AND ml.created_time >= NOW() - INTERVAL 1 MONTH  -- Filter for the past month
-                    GROUP BY u.user_id;
-                    """
-            cursor.execute(query, (user_id,))
-            result = cursor.fetchone()
-            return result
-        except Error as e:
-            print(f"Get user recap error: {e}")
-            return None
-
-    def get_user_dream_context(self, context):
-        try:
-            cursor = self.connection.cursor()
-            query = """
-                    SELECT user_id, COUNT(*) AS message_count
-                    FROM discord.message_log
-                    WHERE message LIKE %s
-                    GROUP BY user_id
-                    ORDER BY message_count DESC
-                    LIMIT 1;
-                    """   
-            cursor.execute(query, ('%' + context + '%',))
-            result = cursor.fetchone()
-            return result
-        except Error as e:
-            print(f"Get user dream context error: {e}")
-            return None
-    
-    def get_dream_text_count_from_thread(self, context):
-        try:
-            cursor = self.connection.cursor()
-            query = """
-                SELECT 
-                    t.thread,
-                    COUNT(ml.thread_id) AS message_count
-                FROM 
-                    discord.message_log ml
-                JOIN 
-                    discord.thread t ON ml.thread_id = t.id
-                WHERE 
-                    ml.message LIKE %s
-                GROUP BY 
-                    t.thread
-                ORDER BY 
-                    message_count DESC
-                LIMIT 3;
-                   """
-            cursor.execute(query, ('%' + context + '%',))
-            result = cursor.fetchall()
-            return result
-        except Error as e:
-            print(f"Get user dream context count error: {e}")
-            return None
-
-    def get_most_message_thread(self, user_id, size):
-        try:
-            cursor = self.connection.cursor()
-            query = """
-                    SELECT 
-                        t.thread,
-                        COUNT(ml.id) AS message_count
-                    FROM 
-                        discord.message_log ml
-                    JOIN 
-                        discord.thread t ON ml.thread_id = t.id
-                    JOIN 
-                        discord.user u ON ml.user_id = u.id
-                    WHERE 
-                        u.user_id = %s
-                        AND ml.created_time >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-                    GROUP BY 
-                        t.thread
-                    ORDER BY 
-                        message_count DESC
-                    LIMIT %s;
-                  """
-            cursor.execute(query, (user_id,size))
-            result = cursor.fetchall()
-            return result
-        except Error as e:
-            print(f"Get user most message thread error: {e}")
-            return ('LE SSERAFIM',)    
-
-    def set_thread_is_mentioned(self,thread):
-        try:
-            cursor = self.connection.cursor()
-            query = """
-                    UPDATE `discord`.`thread` SET `is_mentioned` = 1 WHERE (`thread` = %s);
-                    """
-            cursor.execute(query, (thread,))
-            self.connection.commit()
-        except Error as e:
-            print(f"Set thread is mentioned error: {e}")
-        finally:
-            cursor.close()
-
-    def set_thread_is_unmentioned(self,thread):
-        try:
-            cursor = self.connection.cursor()
-            query = """
-                    UPDATE `discord`.`thread` SET `is_mentioned` = 0 WHERE (`thread` = %s);
-                    """
-            cursor.execute(query, (thread,))
-            self.connection.commit()
-            print(f"set {thread} to unmentioned")
-        except Error as e:
-            print(f"Set thread is unmentioned error: {e}")
-        finally:
-            cursor.close()
-    
-    def check_thread_is_mentioned(self):
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute("FLUSH TABLES;")
-            query = """
-                    SELECT SQL_NO_CACHE `thread` from `discord`.`thread` WHERE `is_mentioned` = 1;                 
-                    """
-            cursor.execute(query)
-            result = cursor.fetchall()
-            
-            if result:
-            
-                return result[0][0]
-            else:
-                
-                return None
-            
-        except Error as e:
-            print(f"Check thread is mentioned error: {e}")
-            return None
-        finally:
-            cursor.close()
-
-    def get_top_user_in_thread(self, thread, count):
-        try:
-            cursor = self.connection.cursor()
-            query = """
-                    SELECT 
-                        u.user_id,
-                        COUNT(ml.id) AS message_count
-                    FROM 
-                        discord.message_log ml
-                    JOIN 
-                        discord.user u ON ml.user_id = u.id
-                    JOIN 
-                        discord.thread t ON ml.thread_id = t.id
-                    WHERE 
-                        t.thread = %s  
-                        AND ml.created_time >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-                    GROUP BY 
-                        u.user_name
-                    ORDER BY 
-                        message_count DESC
-                    LIMIT %s;
-                    """
-            cursor.execute(query,(thread,count))
-            result = cursor.fetchall()
-            return result
-        except Error as e:
-            print(f"Get top user in thread error: {e}")
-            return None  
-        finally:
-            cursor.close()
-
-    def get_message_count_from_thread(self, thread):
-        try:
-            cursor = self.connection.cursor()
-            query = """
-                    SELECT 
-                        COUNT(ml.id) AS total_message_count
-                    FROM 
-                        discord.message_log ml
-                    JOIN 
-                        discord.thread t ON ml.thread_id = t.id
-                    WHERE 
-                        t.thread = %s
-                        AND ml.created_time >= DATE_SUB(NOW(), INTERVAL 7 DAY);
-                    """
-            cursor.execute(query,(thread,))
-            result = cursor.fetchall()
-            print(result)
-            return result[0][0]
-        except Error as e:
-            print(f"Get messaage count from thread error: {e}")
-            return None 
-        finally:
-            cursor.close()
 
 def genearate_text_image(fortune_level,thread):
     text_path = 'fortune_config.json'
@@ -450,12 +100,12 @@ def fortune_teller(driver, message, message_input):
     try:
         user_tag_name = get_message_tag_name(driver,message)
         if user_tag_name is None:
-            user_tag_name = get_original_poster_tag_name(driver)
+            serial_number, user_tag_name = get_original_poster_tag_name(driver)
         print(user_tag_name)
         username_element = message.find_element(By.XPATH, f"//*[@id='message-username-{serial_number}']")
         username = username_element.text
     except Exception:
-        username = "Hi"
+        username = "Hi" 
     fortune_level = ["大吉", "中吉", "吉", "小凶", "大凶"]
     level = random.choice(fortune_level)
     user_record_exists = db.check_record_exists("user","user_id",user_tag_name)
@@ -469,8 +119,12 @@ def fortune_teller(driver, message, message_input):
         db.log_fortune_history(user_tag_name,level)
     except Error as e:
         print(f"db execute log fortune error : {e}")
+    latest_created_time = db.get_latest_fortune_log_created_time(user_tag_name)
+    created_time = datetime.strptime(str(latest_created_time), "%Y-%m-%d %H:%M:%S")
+    now = datetime.now()
+    cooldown_time = now - created_time
     try:
-        results = db.get_most_message_thread(user_tag_name,3)
+        results = db.get_most_message_thread(user_tag_name,5)
         threads = [row[0] for row in results]  # Thread names
         weights = [row[1] for row in results]  # Message counts as weights
         thread = random.choices(threads, weights=weights, k=1)[0]
@@ -499,6 +153,8 @@ def fortune_teller(driver, message, message_input):
             message_input.send_keys(f" @{user_tag_name} 今天的運勢為 : {level}   {fortune_text}")
             message_input.send_keys(Keys.SHIFT,Keys.RETURN)
             message_input.send_keys(f"目前運勢累計 {fortune_trend} ")
+            message_input.send_keys(Keys.SHIFT,Keys.RETURN)
+            message_input.send_keys(f"目前CD時間 : {str(cooldown_time)} ")
         except Exception:
             message_input.send_keys(f" Hi 今天的運勢為 : {level}   {fortune_text}")
         finally:
@@ -547,10 +203,11 @@ def get_original_poster_tag_name(driver):
         previous_message = current_message.find_element(By.XPATH, f"preceding-sibling::li[{pre}]")
         previous_message_content = previous_message.find_element(By.XPATH, ".//div[contains(@class,'messageContent') and not(contains(@class,'repliedTextContent'))]")
         user_tag_name = get_message_tag_name(driver,previous_message_content)
+        serial_number = previous_message_content.get_attribute("id")[16:]
         print(user_tag_name)
         print(pre)
         pre+=1
-    return user_tag_name
+    return serial_number,user_tag_name
 
 def get_user_tag_name(driver,message):
     serial_number = message.get_attribute("id")[16:]
@@ -804,6 +461,17 @@ def get_original_tag_name(driver):
         pre+=1
     return user_tag_name
 
+def calculate_win_or_lose_exp(user_id, monster_lv, monster_exp):
+    db = DiscordDatabaseManager()
+    current_exp,current_level = db.get_user_current_exp_level(user_id)
+    player_attack = random.randint(1,current_level)
+    monster_health = random.randint(1,monster_lv)
+    
+    if player_attack >= monster_health:
+        return "win",monster_exp
+    else:
+        return "lose", monster_exp//2
+
 def main():
     # Set up WebDriver
     email = os.getenv("user_email")
@@ -890,20 +558,92 @@ def main():
                 # print(serial_number)
             except exceptions.TimeoutException:
                 print("can not find simple message")
-            # try:
-            #     user_tag_name = get_user_tag_name(driver,message)
-            #     print(user_tag_name)
-            # except exceptions or Exception:
-            #     print("fail to get user tag name")
+            except exceptions.StaleElementReferenceException:
+                print("message text stale error")
+                continue
             message_input = WebDriverWait(driver, 5).until(
                             EC.presence_of_element_located((By.XPATH, "//div[@role='textbox']")))
             if message_text == "!今日運勢":
                 fortune_teller(driver, message, message_input)
-            
+
+            elif message_text == "!打怪":
+                user_tag_name = get_message_tag_name(driver,message)
+                if user_tag_name is None:
+                    serial_number,user_tag_name = get_original_poster_tag_name(driver)
+                latest_created_time = db.get_latest_pve_created_time(user_tag_name)
+                created_time = datetime.strptime(str(latest_created_time), "%Y-%m-%d %H:%M:%S")
+                now = datetime.now()
+                time_difference = now - created_time
+                cool_down_minutes =  timedelta(minutes=10)
+                if time_difference < cool_down_minutes and latest_created_time is not None:
+                    message_input.send_keys(f"現在還在打怪CD時間，已經過了 {time_difference} ，CD是10分鐘")
+                    message_input.send_keys(Keys.RETURN)
+                    continue
+                file_path = "monster.json"
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    monster_config = json.load(file)
+                monsters = list(monster_config.keys())
+                random_monster = random.choice(monsters)
+                random_monster_lv = monster_config[random_monster]["LV"]
+                random_monster_exp = monster_config[random_monster]["EXP"]
+                win_or_lose, gain_exp = calculate_win_or_lose_exp(user_tag_name,random_monster_lv,random_monster_exp)
+                db.log_user_battle_pve(user_tag_name,random_monster,win_or_lose,gain_exp)
+                if win_or_lose == "win":
+                    db.update_user_exp(gain_exp,user_tag_name)
+                    message_input.send_keys(f"@{user_tag_name} 您擊倒了 LV {random_monster_lv} 的 {random_monster}，並獲得了 {gain_exp} 經驗值 ")
+                    message_input.send_keys(Keys.RETURN)
+                elif win_or_lose == "lose":
+                    
+                    db.update_user_minus_exp(gain_exp,user_tag_name)
+                    if random_monster == "比愛心的呂小弟":
+                        image_path = os.path.join("idol_image", "比愛心的呂小弟.JPG")
+                        relative_path = image_path
+                        absolute_path = os.path.abspath(relative_path)
+                        upload_element = driver.find_element(By.XPATH, "//input[@class='file-input' and @type='file']")   
+                        upload_element.send_keys(absolute_path)
+                        sleep(1.5)
+                    message_input.send_keys(f"@{user_tag_name} 很不幸地，您輸給了 LV {random_monster_lv} 的 {random_monster}，並失去了 {gain_exp} 經驗值 ")
+                    message_input.send_keys(Keys.RETURN)
+                    sleep(1)
+                    
+                
+            elif message_text == "!pin":
+                user_tag_name = get_message_tag_name(driver,message)
+                if user_tag_name is None:
+                    serial_number,user_tag_name = get_original_poster_tag_name(driver)
+                if is_replied is True and user_tag_name == "nicklee_":
+                    command["!公告"] = reply_message_text
+                    with open(file_path, 'w', encoding='utf-8') as file:
+                        json.dump(command, file, indent=4, ensure_ascii=False)
+                    
+
+
+            elif message_text == "!level":
+                user_tag_name = get_message_tag_name(driver,message)
+                if user_tag_name is None:
+                    serial_number,user_tag_name = get_original_poster_tag_name(driver)
+                current_exp,current_level = db.get_user_current_exp_level(user_tag_name)
+                
+                message_input.send_keys(f"@{user_tag_name}  目前獲取經驗值 : {current_exp}，等級 : {current_level}")
+                message_input.send_keys(Keys.RETURN)
+
+            elif message_text == "!魯王":
+                results = db.get_top_level_user()
+                message_input.send_keys("魯王排行榜前五名")
+                message_input.send_keys(Keys.SHIFT,Keys.RETURN)
+                for i in range(0,len(results)):
+                    user_tag_name = results[i][0]
+                    current_exp = results[i][1]
+                    current_level = results[i][2]
+                    message_input.send_keys(f"@{user_tag_name}  目前獲取經驗值 : {current_exp}，等級 : {current_level}")
+                    message_input.send_keys(Keys.SHIFT,Keys.RETURN)
+                message_input.send_keys("真的超魯的，宅必了")
+                message_input.send_keys(Keys.RETURN)
+
             elif message_text == "!song":
                 user_tag_name = get_message_tag_name(driver,message)
                 if user_tag_name is None:
-                    user_tag_name = get_original_poster_tag_name(driver)
+                    serial_number,user_tag_name = get_original_poster_tag_name(driver)
                 result = get_recommend_track(user_tag_name)
                 if result is None:
                     message_input.send_keys("找不到適合你的歌，ㄏ")
@@ -951,7 +691,7 @@ def main():
             elif message_text.startswith("!recap"):
                 user_tag_name = get_message_tag_name(driver,message)
                 if user_tag_name is None:
-                    user_tag_name = get_original_poster_tag_name(driver)
+                    serial_number,user_tag_name = get_original_poster_tag_name(driver)
                 
                 result = db.get_user_recap(user_tag_name)
                 message_count, popular_emoji, popular_thread, thread_message_count, emoji_count = result 

@@ -13,8 +13,10 @@ import json
 import os
 import re
 import random
-from discord_bot import DiscordDatabaseManager,driver_set_up_login,navigate_to_mention_thread,get_message_tag_name,get_original_tag_name,get_original_poster_tag_name
+from discord_bot import driver_set_up_login,navigate_to_mention_thread,get_message_tag_name,get_original_tag_name,get_original_poster_tag_name
+from database_manager import DiscordDatabaseManager
 from mysql.connector import Error
+from datetime import datetime
 
 def navigate_to_unread_thread(driver):
     is_read = False
@@ -55,6 +57,47 @@ def navigate_to_unread_thread(driver):
         pass       
 
 
+
+
+def is_user_cooldown(user_id):
+    db = DiscordDatabaseManager()
+    current_updated_time = db.get_user_updated_time(user_id)
+    if current_updated_time is True:
+        return True
+    updated_time = datetime.strptime(str(current_updated_time), "%Y-%m-%d %H:%M:%S")
+    now = datetime.now()
+    time_difference = now - updated_time
+    print(f"time difference :{time_difference.seconds}")
+    if time_difference.seconds<30:
+        return True
+    else:
+        return False
+
+def user_level_up(user_id):
+    
+    db = DiscordDatabaseManager()
+    current_exp, current_level = db.get_user_current_exp_level(user_id)
+    print(f"current exp : {current_exp}")
+    print(f"current level : {current_level}")
+    if current_level < 15 :
+        threshold = 600
+    elif current_level >= 15 and current_level < 30:
+        threshold = 900
+    elif current_level >= 30 and current_level <45:
+        threshold = 1200
+    elif current_level >=45 and current_level < 60:
+        threshold = 1500
+    db.update_user_current_gain_exp(user_id)
+    gain_exp = db.get_user_current_gain_exp(user_id)
+    
+    if (current_exp + gain_exp) >= threshold:
+        print("level+1")
+        reamin_exp = (current_exp + gain_exp) - threshold
+        print(reamin_exp)
+        db.update_user_level(user_id,reamin_exp)
+    else:
+        print(f"exp+{gain_exp}")
+        db.update_user_exp(gain_exp,user_id)
 
 
 
@@ -124,26 +167,39 @@ def main():
             try:
                 user_tag_name = get_message_tag_name(driver,message)
                 if user_tag_name is None:
-                    user_tag_name = get_original_poster_tag_name(driver)
+                    poster_serial_number,user_tag_name = get_original_poster_tag_name(driver)
                 print(user_tag_name)
+                print(poster_serial_number)
                 
             except Exception:
                 print("failed to get user tag name")
-                username = "user"
+                username = "username"
+                continue
+           
             try:
                 username_element = message.find_element(By.XPATH, f"//*[@id='message-username-{serial_number}']")
                 username = username_element.text
-                print(username)
-            except exceptions.NoSuchElementException as e:
-                print("no such username element, continue")
-                continue
-            except exceptions.StaleElementReferenceException as e:
-                print(f"stale username element error {e}, continue")
-                continue
+                
+            except (exceptions.NoSuchElementException,exceptions.StaleElementReferenceException) as e:
+                try:
+                    username_element = message.find_element(By.XPATH, f"//*[@id='message-username-{poster_serial_number}']")
+                    username = username_element.text
+                    print(username)
+                except exceptions.NoSuchElementException as e:
+                    print("no such username element, pass")
+                    username = "username"
+                    
+                except exceptions.StaleElementReferenceException as e:
+                    print(f"stale username element error {e}, continue")
+                    username = "username"
+                    pass
+                
             
             
             user_record_exists = db.check_record_exists("user","user_id",user_tag_name)
             message_record_exists = db.check_record_exists("message_log","serial_number",serial_number)
+            user_cooldown = is_user_cooldown(user_tag_name)
+           
             if not user_record_exists:
                 try:
                     db.log_user_info(user_tag_name,username)
@@ -156,17 +212,28 @@ def main():
                     if username != "user":
                         db.update_user_info(user_tag_name,username)
                 except Error as e:
-                    print(f"db execute update user error : {e}")
+                    print(f"db execute update user error : {e}") 
             if not message_record_exists:
                 try:
                     if message_text != "":
                        db.log_message_history(user_tag_name,thread_name,message_text,None,serial_number)
                     elif emoji != "":
                         db.log_message_history(user_tag_name,thread_name,None,emoji,serial_number)
+                    else:
+                        db.log_message_history(user_tag_name,thread_name,None,None,serial_number)
                 except Error as e:
                     print(f"db execute log message history error : {e}")
                     continue
-
+            try:
+                if not user_cooldown and not message_record_exists :
+                    print("user level up")
+                    print(user_tag_name)
+                    user_level_up(user_tag_name)
+                else:
+                    print("user is cool down now")
+                    pass
+            except exceptions as e:
+                print(f"level up error : {e}")
             
             sleep(1)  # Wait before checking for new messages
 
