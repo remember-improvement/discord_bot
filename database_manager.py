@@ -377,7 +377,7 @@ class DiscordDatabaseManager:
             query = """
                     UPDATE `discord`.`user_level` ul
                     JOIN `discord`.`user` u ON ul.user_id = u.id
-                    SET ul.exp = ul.exp + %s  
+                    SET ul.exp = %s  
                     WHERE u.user_id = %s;  
                     """
             cursor.execute(query,(exp,user_id))
@@ -428,7 +428,7 @@ class DiscordDatabaseManager:
         finally:
             cursor.close()
 
-    def update_user_level(self, user_id, exp):
+    def update_user_level(self, user_id, exp,level):
         self.connection.autocommit = True
         try:
             cursor = self.connection.cursor()
@@ -440,12 +440,12 @@ class DiscordDatabaseManager:
                     """
             cursor.execute(query_exp,(exp,user_id))
             query = """
-                    UPDATE `discord`.`user_level`ul
+                    UPDATE `discord`.`user_level` ul
                     JOIN `discord`.`user` u ON ul.user_id = u.id
-                    SET `level` = `level` + 1 
+                    SET ul.`level` =  %s
                     WHERE u.`user_id` = %s;
                     """
-            cursor.execute(query,(user_id,))
+            cursor.execute(query,(level,user_id))
             
             # self.connection.commit()
         except Error as e:
@@ -512,6 +512,8 @@ class DiscordDatabaseManager:
         try:
             cursor = self.connection.cursor()
             current_gain_exp = self.get_user_fortune_exp(user_id)
+            
+            
             query = """
                     UPDATE discord.user_level ul
                     JOIN `discord`.`user` u ON ul.user_id = u.id
@@ -572,7 +574,7 @@ class DiscordDatabaseManager:
                     SELECT u.user_id, ul.exp, ul.level
                     FROM `discord`.`user_level` ul
                     JOIN `discord`.`user` u ON ul.user_id = u.id
-                    WHERE u.id NOT IN (6367,15) 
+                    WHERE u.id NOT IN (6367,15,4340) 
                     ORDER BY ul.level DESC, ul.exp DESC
                     LIMIT 5;
                     """
@@ -662,6 +664,28 @@ class DiscordDatabaseManager:
         finally:
             cursor.close()
     
+    def get_latest_pvp_created_time(self, user_id):
+        try:
+            cursor = self.connection.cursor()
+            query = """
+                    SELECT bp.created_time
+                    FROM `discord`.`battle_pvp_log` bp
+                    JOIN `discord`.`user` u ON bp.user_id = u.id
+                    WHERE u.user_id = %s
+                    ORDER BY bp.created_time DESC
+                    LIMIT 1;
+                    """
+            cursor.execute(query,(user_id,))
+            result = cursor.fetchall()
+            if not result:
+                return datetime.strptime("2024-09-02 01:24:58", "%Y-%m-%d %H:%M:%S")
+            return result[0][0]
+        except Error as e:
+            print(f"Get all latest fortune log created time and user id error: {e}")
+            return None 
+        finally:
+            cursor.close()
+    
     def log_user_battle_pve(self, user_id, monster ,win_or_lose, gain_exp):
         self.connection.autocommit = True
         try:
@@ -676,6 +700,303 @@ class DiscordDatabaseManager:
             cursor.execute(query,(monster,win_or_lose,gain_exp,user_id))
         except Error as e:
             print(f"log user battle pve error: {e}")
+            return None 
+        finally:
+            cursor.close()
+
+    def log_user_job(self, user_id, job_name):
+        self.connection.autocommit = True
+        try:
+            cursor = self.connection.cursor()
+            query = """
+                   INSERT INTO `discord`.`user_job` (user_id, job_id)
+                    SELECT u.id, j.id
+                    FROM `discord`.`user` u
+                    JOIN `discord`.`job` j ON j.job_name = %s
+                    WHERE u.user_id = %s;
+                    """
+            cursor.execute(query,(job_name,user_id))
+        except Error as e:
+            print(f"log user job error: {e}")
+            return None 
+        finally:
+            cursor.close()
+    def get_user_job(self, user_id):
+        
+        try:
+            cursor = self.connection.cursor()
+            query = """
+                    SELECT job_name
+                    FROM `discord`.`user_job` uj
+                    JOIN `discord`.`user` u ON uj.user_id = u.id
+                    JOIN `discord`.`job` j ON uj.job_id = j.id
+                    WHERE u.user_id = %s; 
+                    """
+            cursor.execute(query,(user_id,))
+            result = cursor.fetchall()
+            if not result:
+                return None
+            return result[0][0]
+        except Error as e:
+            print(f"log user job error: {e}")
+            return None 
+        finally:
+            cursor.close()
+    
+    def check_job_exist(self, job_name):
+        try:
+            cursor = self.connection.cursor()
+            query = """
+                    SELECT *
+                    FROM `discord`.`job`
+                    WHERE job_name = %s; 
+                    """
+            cursor.execute(query,(job_name,))
+            result = cursor.fetchall()
+            if not result:
+                return False
+            return True
+        except Error as e:
+            print(f"log user job error: {e}")
+            return None 
+        finally:
+            cursor.close()
+    
+    def update_user_pvp_status(self, user_id, status):
+        self.connection.autocommit = True
+        try:
+            cursor = self.connection.cursor()
+            
+            query = """
+                    UPDATE discord.user_level ul
+                    JOIN `discord`.`user` u ON ul.user_id = u.id
+                    SET ul.pvp_status = %s
+                    WHERE u.user_id = %s;     
+                    """
+            cursor.execute(query,(status,user_id,))
+        except Error as e:
+            print(f"Update user pvp status error : {e}")
+            return None 
+        finally:
+            cursor.close()
+
+    def get_random_pvp_opponent(self,user_id):
+        try:
+            cursor = self.connection.cursor()
+            query = """
+                    SELECT u.user_id
+                    FROM `discord`.`user_level` ul
+                    JOIN `discord`.`user` u ON ul.user_id = u.id
+                    WHERE ul.pvp_status = 'on' 
+                    AND ul.level >= 1 
+                    AND ul.user_id != (SELECT id FROM `discord`.`user` WHERE user_id = %s)
+                    ORDER BY RAND()
+                    LIMIT 1;
+                    """
+            cursor.execute(query,(user_id,))
+            result = cursor.fetchall()
+            if not result:
+                return None
+            return result[0][0]
+        except Error as e:
+            print(f"Get random pvp opponent error: {e}")
+            return None 
+        finally:
+            cursor.close()
+    
+    def log_user_battle_pvp(self,user_id,opponent_id ,win_user_id,lose_user_id,bargain_exp):
+        self.connection.autocommit = True
+        try:
+            cursor = self.connection.cursor()
+            query = """
+                INSERT INTO `discord`.`battle_pvp_log` (`user_id`, `opponent_id`, `user_job_id`, `opponent_job_id`, `win`, `lose`, `bargain_exp`)
+                SELECT 
+                    u.id AS user_id, 
+                    o.id AS opponent_id, 
+                    user_job.job_id, 
+                    opponent_job.job_id, 
+                    (SELECT id FROM `discord`.`user` WHERE user_id = %s) AS win, 
+                    (SELECT id FROM `discord`.`user` WHERE user_id = %s) AS lose, 
+                    %s AS bargain_exp
+                FROM `discord`.`user` u
+                JOIN `discord`.`user` o ON o.user_id = %s
+                JOIN `discord`.`user_job` user_job ON user_job.user_id = u.id
+                JOIN `discord`.`user_job` opponent_job ON opponent_job.user_id = o.id
+                WHERE u.user_id = %s;
+
+                    """
+            cursor.execute(query,(win_user_id,lose_user_id,bargain_exp,opponent_id,user_id))
+        except Error as e:
+            print(f"log user battle pve error: {e}")
+            return None 
+        finally:
+            cursor.close()
+    
+    def get_user_increment_id(self, user_id):
+        try:
+            cursor = self.connection.cursor()
+            query = """
+                    SELECT id FROM discord.user where user_id = %s;
+                    """
+            cursor.execute(query,(user_id,))
+            result = cursor.fetchall()
+            if not result:
+                return None
+            return result[0][0]
+        except Error as e:
+            print(f"Get user increment id error: {e}")
+            return None 
+        finally:
+            cursor.close()
+    
+    def get_user_previous_duel_result(self, user_id):
+        try:
+            cursor = self.connection.cursor()
+            query = """
+                    SELECT bpl.win, bpl.lose
+                    FROM `discord`.`battle_pvp_log` bpl
+                    JOIN `discord`.`user` u ON bpl.user_id = u.id
+                    WHERE u.user_id = %s
+                    ORDER BY bpl.id DESC
+                    LIMIT 1;
+                    """
+            cursor.execute(query,(user_id,))
+            result = cursor.fetchall()
+            if not result:
+                return None
+            return result[0]
+        except Error as e:
+            print(f"Get user increment id error: {e}")
+            return None 
+        finally:
+            cursor.close()
+            
+
+    def get_user_pvp_win_streak(self, user_id):
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("FLUSH TABLES;")
+            query = """
+                    SELECT ul.win_streak
+                    FROM `discord`.`user_level` ul
+                    JOIN `discord`.`user` u ON ul.user_id = u.id
+                    WHERE u.user_id = %s  
+                    """
+            cursor.execute(query,(user_id,))
+            result = cursor.fetchall()
+            if not result:
+                return None
+            return result[0][0]
+        except Error as e:
+            print(f"Get user pvp win streak error: {e}")
+            return None 
+        finally:
+            cursor.close()
+    
+    def get_user_pvp_lose_streak(self, user_id):
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("FLUSH TABLES;")
+            query = """
+                    SELECT ul.lose_streak
+                    FROM `discord`.`user_level` ul
+                    JOIN `discord`.`user` u ON ul.user_id = u.id
+                    WHERE u.user_id = %s  
+                    """
+            cursor.execute(query,(user_id,))
+            result = cursor.fetchall()
+            if not result:
+                return None
+            return result[0][0]
+        except Error as e:
+            print(f"Get user pvp lose streak error: {e}")
+            return None 
+        finally:
+            cursor.close()
+
+
+    def update_user_pvp_streak(self, user_id, duel_result):
+        self.connection.autocommit = True
+        try:
+            cursor = self.connection.cursor()
+            if duel_result == "win":
+                query = """
+                        UPDATE discord.user_level ul
+                        JOIN `discord`.`user` u ON ul.user_id = u.id
+                        SET ul.win_streak = ul.win_streak + 1 
+                        WHERE u.user_id = %s; 
+                        """
+            else:
+                query = """
+                        UPDATE discord.user_level ul
+                        JOIN `discord`.`user` u ON ul.user_id = u.id
+                        SET ul.lose_streak = ul.lose_streak + 1 
+                        WHERE u.user_id = %s; 
+                        """
+            cursor.execute(query,(user_id,))
+        except Error as e:
+            print(f"Update user pvp streak error: {e}")
+            return None 
+        finally:
+            cursor.close()
+
+    def update_user_pvp_streak_to_default(self, user_id,duel_result):
+        self.connection.autocommit = True
+        try:
+            cursor = self.connection.cursor()
+            if duel_result == "win":
+                query = """
+                        UPDATE discord.user_level ul
+                        JOIN `discord`.`user` u ON ul.user_id = u.id
+                        SET ul.lose_streak = 0
+                        WHERE u.user_id = %s; 
+                        """
+            else:
+                query = """
+                        UPDATE discord.user_level ul
+                        JOIN `discord`.`user` u ON ul.user_id = u.id
+                        SET ul.win_streak = 0
+                        WHERE u.user_id = %s; 
+                        """
+            cursor.execute(query,(user_id,))
+        except Error as e:
+            print(f"Update user pvp streak to default error: {e}")
+            return None 
+        finally:
+            cursor.close()
+    
+    def insert_new_user_to_user_level_table(self):
+        self.connection.autocommit = True
+        try:
+            cursor = self.connection.cursor()
+            query = """
+                    INSERT INTO discord.user_level (user_id, user_name, level, exp, current_gain_exp, pvp_status, win_streak, lose_streak, created_time, updated_time)
+                    SELECT u.id, u.user_name, 1, 0, 20, 'off', 0, 0, NOW(), NOW()
+                    FROM discord.user u
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM discord.user_level ul
+                        WHERE ul.user_id = u.id
+                    );
+                    """
+            cursor.execute(query)
+        except Error as e:
+            print(f"insert new user to user level table error: {e}")
+            return None 
+        finally:
+            cursor.close()
+    def update_custom_user_name_in_user_level_table(self):
+        self.connection.autocommit = True
+        try:
+            cursor = self.connection.cursor()
+            query = """
+                    UPDATE discord.user_level ul
+                    SET ul.user_name = (SELECT u.user_name FROM discord.user u WHERE u.id = ul.user_id)
+                    WHERE EXISTS (SELECT 1 FROM discord.user u WHERE u.id = ul.user_id);
+                    """
+            cursor.execute(query)
+        except Error as e:
+            print(f"update user custom name error: {e}")
             return None 
         finally:
             cursor.close()

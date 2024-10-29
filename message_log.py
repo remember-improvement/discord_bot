@@ -13,16 +13,16 @@ import json
 import os
 import re
 import random
-from discord_bot import driver_set_up_login,navigate_to_mention_thread,get_message_tag_name,get_original_tag_name,get_original_poster_tag_name
+from discord_bot import driver_set_up_login,get_message_tag_name,get_original_poster_tag_name,calculate_level_exp
 from database_manager import DiscordDatabaseManager
 from mysql.connector import Error
-from datetime import datetime
+from datetime import datetime,timedelta
 
 def navigate_to_unread_thread(driver):
     is_read = False
     is_jump_button_clicked = False
-    message_input = WebDriverWait(driver, 5).until(
-                                EC.presence_of_element_located((By.XPATH, "//div[@role='textbox']"))  )
+    # message_input = WebDriverWait(driver, 5).until(
+    #                             EC.presence_of_element_located((By.XPATH, "//div[@role='textbox']"))  )
     try:
         thread_unread = WebDriverWait(driver, 2).until(
             EC.presence_of_element_located((By.XPATH, "//div[@role='button'][contains(@aria-label,'unread') or contains(@aria-label,'未讀')]")))
@@ -73,31 +73,29 @@ def is_user_cooldown(user_id):
     else:
         return False
 
+
 def user_level_up(user_id):
     
     db = DiscordDatabaseManager()
     current_exp, current_level = db.get_user_current_exp_level(user_id)
     print(f"current exp : {current_exp}")
     print(f"current level : {current_level}")
-    if current_level < 15 :
-        threshold = 600
-    elif current_level >= 15 and current_level < 30:
-        threshold = 900
-    elif current_level >= 30 and current_level <45:
-        threshold = 1200
-    elif current_level >=45 and current_level < 60:
-        threshold = 1500
-    db.update_user_current_gain_exp(user_id)
+   
+    job = db.get_user_job(user_id) 
+    latest_created_time = db.get_latest_fortune_log_created_time(user_id)
+    created_time = datetime.strptime(str(latest_created_time), "%Y-%m-%d %H:%M:%S")
+    now = datetime.now()
+    time_difference = now - created_time
+    cool_down_hours =  timedelta(hours=24)
+    if job == "牧師" and time_difference < cool_down_hours:
+        pass
+    else:
+        db.update_user_current_gain_exp(user_id)
     gain_exp = db.get_user_current_gain_exp(user_id)
     
-    if (current_exp + gain_exp) >= threshold:
-        print("level+1")
-        reamin_exp = (current_exp + gain_exp) - threshold
-        print(reamin_exp)
-        db.update_user_level(user_id,reamin_exp)
-    else:
-        print(f"exp+{gain_exp}")
-        db.update_user_exp(gain_exp,user_id)
+    calculate_level_exp(user_id,current_level,current_exp,gain_exp)
+
+
 
 
 
@@ -128,12 +126,24 @@ def main():
             WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.XPATH, "//ol[@data-list-id='chat-messages']"))
             )
-            thread_element = WebDriverWait(driver,3).until(
-                EC.presence_of_element_located((By.XPATH,"//h2[@class='defaultColor_a595eb heading-md/semibold_dc00ef defaultColor_e9e35f title_fc4f04']"))
-            )
-            full_text = thread_element.text
-            thread_name = full_text.split(":")[-1].strip()
-            print(thread_name)
+            try:
+                # Increased the wait time to 10 seconds
+                thread_element = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.XPATH, "//h2[@class='defaultColor_a595eb heading-md/semibold_dc00ef defaultColor_e42ec6 title_fc4f04']"))
+                )
+                
+                # Check if the element is visible
+                if thread_element.is_displayed():
+                    full_text = thread_element.text
+                    thread_name = full_text.split(":")[-1].strip()
+                    print(thread_name)
+                else:
+                    print("Element located but not visible yet.")
+            except exceptions.TimeoutException as e:
+                # Log the full exception for debugging
+                print(f"TimeoutException occurred: {str(e)}")
+                print("Cannot locate thread name element, continuing...")
+                continue
             try:
                 message = WebDriverWait(driver, 3).until(
                     EC.presence_of_element_located((By.XPATH, "//ol[@data-list-id='chat-messages']/li[last()]//div[contains(@class,'messageContent') and not(contains(@class,'repliedTextContent'))]"))
@@ -175,7 +185,8 @@ def main():
                 print("failed to get user tag name")
                 username = "username"
                 continue
-           
+            if user_tag_name is None:
+                continue
             try:
                 username_element = message.find_element(By.XPATH, f"//*[@id='message-username-{serial_number}']")
                 username = username_element.text

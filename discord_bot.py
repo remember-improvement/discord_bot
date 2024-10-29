@@ -9,6 +9,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 from fake_useragent import UserAgent
 from time import sleep
 import json
+import math
 import os
 import re
 import random
@@ -19,6 +20,7 @@ from mysql.connector import Error
 from selenium.common import exceptions
 from database_manager import DiscordDatabaseManager
 from datetime import datetime,timedelta
+from job import Knight,Mage,Thief,Priest 
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -30,7 +32,7 @@ def genearate_text_image(fortune_level,thread):
     with open(text_path, 'r', encoding='utf-8') as file:
         fortune = json.load(file)
     fortune_text = fortune[fortune_level]
-    thread_list=["aespa", "LE SSERAFIM", "Cosmic Girls", "ITZY", "NMIXX", "IVE-「真」好DIVE的窩", "SSS.jpg交易串", "(G)I-DLE","STAYC","BABYMONSTER","RESCENE","鐵豚"]
+    thread_list=["aespa", "LE SSERAFIM", "WJSN", "ITZY", "NMIXX", "IVE-「真」好DIVE的窩", "SSS.jpg交易串", "(G)I-DLE","STAYC","BABYMONSTER","RESCENE","鐵豚"]
     
     if thread not in thread_list:
         default_image_directory = "idol_image"
@@ -119,6 +121,7 @@ def fortune_teller(driver, message, message_input):
         db.log_fortune_history(user_tag_name,level)
     except Error as e:
         print(f"db execute log fortune error : {e}")
+    db.update_user_current_gain_exp(user_tag_name)
     latest_created_time = db.get_latest_fortune_log_created_time(user_tag_name)
     created_time = datetime.strptime(str(latest_created_time), "%Y-%m-%d %H:%M:%S")
     now = datetime.now()
@@ -127,7 +130,10 @@ def fortune_teller(driver, message, message_input):
         results = db.get_most_message_thread(user_tag_name,5)
         threads = [row[0] for row in results]  # Thread names
         weights = [row[1] for row in results]  # Message counts as weights
-        thread = random.choices(threads, weights=weights, k=1)[0]
+        try:
+            thread = random.choices(threads, weights=weights, k=1)[0]
+        except IndexError:
+            thread='aespa'
         print(thread)
     except Error as e:
         print(f"db execute get most message error : {e}")
@@ -180,8 +186,10 @@ def get_message_tag_name(driver,message):
         username_element = WebDriverWait(message, 2).until(
             EC.presence_of_element_located((By.XPATH, f"//*[@id='message-username-{serial_number}']")))
         username_element.click()
-    except exceptions.TimeoutException or Exception or exceptions.NoSuchElementException:
+    except (exceptions.TimeoutException, Exception ,exceptions.NoSuchElementException, exceptions.ElementClickInterceptedException):
         print("error when get username element")
+        return None
+    
     try:
         user_tag_name_element = WebDriverWait(driver,2).until(EC.presence_of_element_located((By.XPATH,"//span[@class='userTagUsername_c32acf']")))
         user_tag_name = user_tag_name_element.text
@@ -199,7 +207,7 @@ def get_original_poster_tag_name(driver):
     user_tag_name = None
     current_message = WebDriverWait(driver, 3).until(
             EC.presence_of_element_located((By.XPATH, "//ol[@data-list-id='chat-messages']/li[last()]")))
-    while user_tag_name is None:
+    while user_tag_name is None and pre < 5:
         previous_message = current_message.find_element(By.XPATH, f"preceding-sibling::li[{pre}]")
         previous_message_content = previous_message.find_element(By.XPATH, ".//div[contains(@class,'messageContent') and not(contains(@class,'repliedTextContent'))]")
         user_tag_name = get_message_tag_name(driver,previous_message_content)
@@ -472,6 +480,245 @@ def calculate_win_or_lose_exp(user_id, monster_lv, monster_exp):
     else:
         return "lose", monster_exp//2
 
+def get_attack_min(level):
+        if level < 15:
+            return 1
+        elif 15 <= level < 30:
+            return 10
+        elif 30 <= level < 45:
+            return 20
+        elif 45 <= level < 60:
+            return 30
+        elif 60 <= level < 85:
+            return 40
+        elif 85 <= level < 100:
+            return 50
+        elif 100 <= level <120 :
+            return 60
+        else:
+            return 70
+
+
+def calculate_expedition_boss_result(player_id_list, boss_hp, boss_lv, boss_exp):
+    db = DiscordDatabaseManager()
+
+    if len(player_id_list) < 1:
+        return None 
+    player_damage_dict={"players_total_damage":0}
+    modifier = 1
+    exp_shared = len(player_id_list)
+    for player_id in player_id_list:
+        player_obj = initialize_job_for_user(player_id)
+        if player_obj:
+            player_obj_class, player_job = player_obj 
+        
+        if player_obj_class:
+            if player_obj_class.lv > boss_lv:
+                modifier = 10               
+            elif player_obj_class.lv <= boss_lv:
+                modifier = 5
+            else:
+                modifier = 1
+            player_attack = random.randint(get_attack_min(player_obj_class.lv),player_obj_class.lv)
+            player_damage = player_attack * modifier
+            if player_id not in player_damage_dict:
+                player_damage_dict[player_id] = {"damage":player_damage,"job":player_job,"current_level":player_obj_class.lv,"current_exp":player_obj_class.exp} 
+            player_damage_dict["players_total_damage"]+=player_damage
+        else:
+            continue
+        print(player_damage_dict)  
+
+    if player_damage_dict["players_total_damage"] >= boss_hp:
+        
+        for player_id in player_id_list: 
+            individual_damage = player_damage_dict[player_id]["damage"]
+            total_damage = player_damage_dict["players_total_damage"]
+            gain_exp_each_player =  (boss_exp*(0.8+exp_shared*0.1)/exp_shared) * (1+individual_damage/total_damage)
+            player_damage_dict[player_id]["gain_exp"] = int(gain_exp_each_player)
+            calculate_level_exp(player_id,player_damage_dict[player_id]["current_level"],player_damage_dict[player_id]["current_exp"],int(gain_exp_each_player))
+        return "win", gain_exp_each_player, player_damage_dict
+    else:
+        for player_id in player_id_list:
+            lost_exp_each_player = boss_exp//exp_shared
+            player_damage_dict[player_id]["gain_exp"] = int(lost_exp_each_player)
+            current_exp, current_level = db.get_user_current_exp_level(player_id)
+            if exp_shared >= 5:
+                if current_exp - lost_exp_each_player < 0:
+                    db.update_user_exp(0,player_id)
+                else:
+                    db.update_user_minus_exp(lost_exp_each_player,player_id)
+        return "lose", lost_exp_each_player, player_damage_dict
+            
+            
+    
+
+def calculate_pvp_duel_result(opponent_id,user_id):
+    db = DiscordDatabaseManager()
+    opponent_obj = initialize_job_for_user(opponent_id)
+    if opponent_obj:
+        opponent_job_class, opponent_job = opponent_obj
+    user_obj = initialize_job_for_user(user_id)
+    if user_obj:
+        user_job_class, user_job = user_obj
+    result={}
+    result["user_job"] = user_job
+    result["opponent_job"] = opponent_job
+    if opponent_job_class and user_job_class:
+        bargain_exp =random.randrange(100,300+min(opponent_job_class.exp,user_job_class.exp) ,5)
+        result["bargain_exp"] = bargain_exp
+        
+        
+        user_point = random.randint(1,user_job_class.lv)
+        opponent_point = random.randint(1,opponent_job_class.lv)
+        if user_point > opponent_point :
+            if user_job_class.lv <= opponent_job_class.lv:
+                lv_diff = opponent_job_class.lv - user_job_class.lv
+                modifier = 1+(lv_diff/100)
+                user_gain_exp = user_job_class.duel_result(user_id,"win",int(bargain_exp*modifier))
+                opponent_lost_exp = opponent_job_class.duel_result(opponent_id,"lose",int(bargain_exp)*1.5)
+            else:
+                user_gain_exp = user_job_class.duel_result(user_id,"win",bargain_exp)
+                opponent_lost_exp = opponent_job_class.duel_result(opponent_id,"lose",bargain_exp*0.8)
+            print(f"user gain exp {user_gain_exp}")
+            print(f"opponent lost exp {opponent_lost_exp}")
+            db.update_user_pvp_streak(user_id,"win")
+            db.update_user_pvp_streak_to_default(user_id,"win")
+            db.update_user_pvp_streak(opponent_id,"lose")
+            db.update_user_pvp_streak_to_default(opponent_id,"lose")
+            if isinstance(user_gain_exp, tuple):
+                user_gain_exp, result["user_effect_triggered"] = user_gain_exp
+            else:
+                result["user_effect_triggered"] = None
+            if isinstance(opponent_lost_exp, tuple):
+                opponent_lost_exp, result["opponent_effect_triggered"] = opponent_lost_exp
+            else:
+                result["opponent_effect_triggered"] = None
+            result["user_job_exp"] = user_gain_exp
+            result["opponent_job_exp"] = opponent_lost_exp
+            result["win"] = user_id
+            result["lost"] = opponent_id
+            result["fair"] = False
+            db.log_user_battle_pvp(user_id,opponent_id,result["win"],result["lost"],result["bargain_exp"])
+        elif user_point < opponent_point:
+            
+            if user_job_class.lv <= opponent_job_class.lv:
+
+                user_lost_exp = user_job_class.duel_result(user_id,"lose",bargain_exp*0.8)
+                opponent_gain_exp = opponent_job_class.duel_result(opponent_id,"win",bargain_exp)
+            else:
+                lv_diff = user_job_class.lv- opponent_job_class.lv
+                modifier = 1+(lv_diff/100)
+                user_lost_exp = user_job_class.duel_result(user_id,"lose",int(bargain_exp*1.5))
+                opponent_gain_exp = opponent_job_class.duel_result(opponent_id,"win",int(bargain_exp*modifier))
+            print(f"user lost exp {user_lost_exp}")
+            print(f"opponent gain exp {opponent_gain_exp}")
+            db.update_user_pvp_streak(user_id,"lose")
+            db.update_user_pvp_streak_to_default(user_id,"lose")
+            db.update_user_pvp_streak(opponent_id,"win")
+            db.update_user_pvp_streak_to_default(opponent_id,"win")
+            if isinstance(user_lost_exp, tuple):
+                user_lost_exp, result["user_effect_triggered"] = user_lost_exp
+            else:
+                result["user_effect_triggered"] = None
+            if isinstance(opponent_gain_exp, tuple):
+                opponent_gain_exp, result["opponent_effect_triggered"] = opponent_gain_exp
+            else:
+                result["opponent_effect_triggered"] = None
+            result["win"] = opponent_id
+            result["lost"] = user_id
+            result["user_job_exp"] = user_lost_exp
+            result["opponent_job_exp"] = opponent_gain_exp
+            result["fair"] = False
+            db.log_user_battle_pvp(user_id,opponent_id,result["win"],result["lost"],result["bargain_exp"])
+        else:
+            user_job_class.duel_result(user_id,"win",bargain_exp)
+            opponent_job_class.duel_result(opponent_id,"win",bargain_exp)
+            result["user_job_exp"] = bargain_exp
+            result["opponent_job_exp"] = bargain_exp
+            result["win"] = None
+            result["lost"] = None
+            result["fair"] = True
+        print(result)
+        return user_job_class, opponent_job_class, result
+    else:
+        return None
+
+def get_exp_threshold(level):
+        if level < 15:
+            return 600
+        elif 15 <= level < 30:
+            return 900
+        elif 30 <= level < 45:
+            return 1200
+        elif 45 <= level < 60:
+            return 1500
+        elif 60 <= level < 85:
+            return 3000
+        elif 85 <= level < 100:
+            return 5000
+        elif 100 <= level :
+            return 10000
+        else:
+            return 50000
+
+def calculate_level_exp(user_id, current_level, current_exp, gain_exp):
+    db = DiscordDatabaseManager()
+    
+    
+
+    remaining_exp = current_exp + gain_exp
+    level_up = False
+
+   
+    # Loop to handle leveling up multiple times if the gain_exp is large
+    while remaining_exp >= get_exp_threshold(current_level):
+        threshold = get_exp_threshold(current_level)
+        remaining_exp -= threshold
+        current_level += 1
+        level_up = True
+
+    # Update user level and remaining exp in database
+    if level_up and current_level < 40:
+        print(f"Level up! New level: {current_level}, remaining exp: {remaining_exp}")
+        db.update_user_level(user_id, remaining_exp, current_level)
+    elif level_up and current_level >=40:
+        print(f"Level up! New level: {current_level}, remaining exp: 0")
+        db.update_user_level(user_id, 0, current_level)
+    else:
+        db.update_user_exp(remaining_exp,user_id)
+        
+    
+
+def check_user_has_job(user_id):
+    db = DiscordDatabaseManager()
+    user_has_job = db.get_user_job(user_id)
+    if user_has_job is not None:
+        return True
+    return False
+
+def initialize_job_for_user(user_id):
+    db = DiscordDatabaseManager()
+    job_name = db.get_user_job(user_id)
+        # Dictionary mapping job names to their respective classes
+    job_classes = {
+        "騎士": Knight,
+        "盜賊": Thief,
+        "法師": Mage,
+        "牧師": Priest
+    }
+
+        # Get the class corresponding to the job name
+    job_class = job_classes.get(job_name)
+
+    if job_class:
+        # Initialize the job class with the exp and level from the database
+        user_job_instance = job_class(user_id)
+        print(f"Initialized {job_name} class for user ID {user_id}")
+        return user_job_instance,job_name
+    else:
+        print(f"No matching job class found for job: {job_name}")
+        return None
+
 def main():
     # Set up WebDriver
     email = os.getenv("user_email")
@@ -479,18 +726,17 @@ def main():
     driver = driver_set_up_login(email,password)
     
     db = DiscordDatabaseManager()
-    # Main loop for message processing
-    # Path to your JSON file
+    
     file_path = 'command_config.json'
 
-    # Open the file and load the data
+    
     with open(file_path, 'r', encoding='utf-8') as file:
         command = json.load(file)
     try:
         
         try:
             thread = WebDriverWait(driver, 1000).until(
-                EC.presence_of_element_located((By.XPATH, "//div[@role='button'][contains(@aria-label, 'LE SSERAFIM')]")))
+                EC.presence_of_element_located((By.XPATH, "//div[@role='button'][contains(@aria-label, '野區練等')]")))
             thread.click()
             jump_button = WebDriverWait(driver, 3).until(
                 EC.element_to_be_clickable((By.XPATH, "//button[contains(@class,'barButtonAlt_cf58b5')]")))
@@ -501,23 +747,25 @@ def main():
         except Exception:
             pass
         
-        message_queue=[]
+        sleep(5)
         while True:
             # sleep(10)
+            
             is_replied =False
+            
             mentioned_thread = db.check_thread_is_mentioned()
             print(f"mentioned thread : {mentioned_thread}")
             if mentioned_thread is not None:    
                 navigate_to_mention_thread(driver,mentioned_thread)
                 db.set_thread_is_unmentioned(mentioned_thread)
-            thread_element = WebDriverWait(driver,3).until(
-                EC.presence_of_element_located((By.XPATH,"//h2[@class='defaultColor_a595eb heading-md/semibold_dc00ef defaultColor_e9e35f title_fc4f04']"))
-            )
-            full_text = thread_element.text
-            thread_name = full_text.split(":")[-1].strip()
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.XPATH, "//ol[@data-list-id='chat-messages']"))
-            )
+            # thread_element = WebDriverWait(driver,3).until(
+            #     EC.presence_of_element_located((By.XPATH,"//h2[@class='defaultColor_a595eb heading-md/semibold_dc00ef defaultColor_e9e35f title_fc4f04']"))
+            # )
+            # full_text = thread_element.text
+            # thread_name = full_text.split(":")[-1].strip()
+            # WebDriverWait(driver, 10).until(
+            #     EC.presence_of_element_located((By.XPATH, "//ol[@data-list-id='chat-messages']"))
+            # )
             
             try:
                 reply_message = WebDriverWait(driver, 0.5).until(
@@ -563,8 +811,194 @@ def main():
                 continue
             message_input = WebDriverWait(driver, 5).until(
                             EC.presence_of_element_located((By.XPATH, "//div[@role='textbox']")))
+            now = datetime.now()
+            print(now)
+            if now.minute in (0,1):
+                file_path = 'boss.json'
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    boss_config = json.load(file)
+                boss = list(boss_config.keys())
+                random_boss = random.choice(boss)
+                random_boss_lv = boss_config[random_boss]["LV"]
+                random_boss_exp = boss_config[random_boss]["EXP"]
+                random_boss_hp = boss_config[random_boss]["HP"]
+                message_input.send_keys("================================================")
+                message_input.send_keys(Keys.SHIFT, Keys.RETURN)
+                message_input.send_keys(f"本次隨機BOSS為 {random_boss}  LV : {random_boss_lv}  EXP : {random_boss_exp}  HP : {random_boss_hp}")
+                message_input.send_keys(Keys.SHIFT, Keys.RETURN)
+                message_input.send_keys(f"請在 3分鐘內 輸入 !join 組成討伐團 ")
+                message_input.send_keys(Keys.SHIFT, Keys.RETURN)
+                message_input.send_keys("================================================")
+                message_input.send_keys(Keys.RETURN)
+                player_id_list=[]
+                start_party_time = datetime.now()
+                while True :
+                    if datetime.now() - start_party_time > timedelta(minutes=3):
+                        print("Exceeded 30 seconds. Breaking the loop.")
+                        break
+                    try:
+                        message = WebDriverWait(driver, 3).until(
+                            EC.presence_of_element_located((By.XPATH, "//ol[@data-list-id='chat-messages']/li[last()]//div[contains(@class,'messageContent') and not(contains(@class,'repliedTextContent'))]"))
+                        )
+                        message_text = message.text
+
+                        print(message_text)
+                    except exceptions.TimeoutException:
+                        print("can not find simple message")
+                    except exceptions.StaleElementReferenceException:
+                        print("message text stale error")
+                        continue
+                    if message_text == "!join":
+                        user_tag_name = get_message_tag_name(driver,message)
+                        if user_tag_name is None:
+                            serial_number,user_tag_name = get_original_poster_tag_name(driver)
+                        if user_tag_name is None:
+                            continue
+                        if user_tag_name not in player_id_list:
+                            player_id_list.append(user_tag_name)
+                            message_input.send_keys(f"@{user_tag_name} 已成功加入 {random_boss} 討伐團")
+                            message_input.send_keys(Keys.RETURN)
+                            
+                        
+                message_input.send_keys("========================================")
+                message_input.send_keys(Keys.SHIFT, Keys.RETURN)   
+                message_input.send_keys("組隊已截止，開始討伐 ...") 
+                message_input.send_keys(Keys.SHIFT, Keys.RETURN)    
+                message_input.send_keys("========================================") 
+                message_input.send_keys(Keys.RETURN)
+
+                print(player_id_list)
+               
+                result =calculate_expedition_boss_result(player_id_list,random_boss_hp,random_boss_lv,random_boss_exp)
+                
+                if result is None:
+                    message_input.send_keys("此次討伐無人參加，一小時後再見")
+                    message_input.send_keys(Keys.RETURN)
+                    continue
+                else:
+                    win_or_lose, gain_exp, player_damage_dict = result
+                    print(player_damage_dict)
+                    
+                if win_or_lose == "win":
+                    message_input.send_keys(f"討伐團總共對 {random_boss} 造成了 {str(player_damage_dict["players_total_damage"])} 點傷害，{random_boss} 的血量為 {str(random_boss_hp)}，討伐成功 ! ")
+                    message_input.send_keys(Keys.SHIFT, Keys.RETURN)
+                    for player in player_id_list:
+                        db.log_user_battle_pve(player,random_boss,win_or_lose,gain_exp)
+                        message_input.send_keys(f"@{player} 造成了 {str(player_damage_dict[player]["damage"])} 點傷害 獲得了 {str(player_damage_dict[player]["gain_exp"])} exp")
+                        message_input.send_keys(Keys.SHIFT, Keys.RETURN)
+                    message_input.send_keys(Keys.RETURN)    
+                else:
+                    message_input.send_keys(f"總共對 {random_boss} 造成了 {player_damage_dict["players_total_damage"]} 點傷害，{random_boss} 的血量為 {str(random_boss_hp)}，討伐失敗 ! ")
+                    message_input.send_keys(Keys.SHIFT, Keys.RETURN)
+                    if len(player_id_list) >=5:
+                        for player in player_id_list:
+                            db.log_user_battle_pve(player,random_boss,win_or_lose,gain_exp)
+                            message_input.send_keys(f"@{player} 造成了 {str(player_damage_dict[player]["damage"])} 點傷害 失去了 {str(player_damage_dict[player]["gain_exp"])} exp")
+                            message_input.send_keys(Keys.SHIFT, Keys.RETURN)
+                        message_input.send_keys(Keys.RETURN)
+                    else:
+                        message_input.send_keys("討伐團人數不足 5 人，此次討伐不會損失經驗！")
+                        for player in player_id_list:
+                            message_input.send_keys(f"@{player} 造成了 {str(player_damage_dict[player]["damage"])} 點傷害")
+                            message_input.send_keys(Keys.SHIFT, Keys.RETURN)
+                        message_input.send_keys(Keys.RETURN)
+                
             if message_text == "!今日運勢":
                 fortune_teller(driver, message, message_input)
+            
+            elif message_text.startswith("!job"):
+                job_name = message_text[5:]
+                user_tag_name = get_message_tag_name(driver,message)
+                if user_tag_name is None:
+                    serial_number,user_tag_name = get_original_poster_tag_name(driver)
+                user_has_job = check_user_has_job(user_tag_name)
+                is_job_exist = db.check_job_exist(job_name)
+                if user_has_job or not is_job_exist:
+                    message_input.send_keys(f"@{user_tag_name} 已轉職或輸入職業錯誤")
+                    message_input.send_keys(Keys.RETURN)
+                    continue
+                db.log_user_job(user_tag_name,job_name)
+                message_input.send_keys(f"@{user_tag_name} 已轉職成為 {job_name}")
+                message_input.send_keys(Keys.RETURN)
+
+            elif message_text.startswith("!pvp"):
+                status = message_text[5:]
+                user_tag_name = get_message_tag_name(driver,message)
+                if user_tag_name is None:
+                    serial_number,user_tag_name = get_original_poster_tag_name(driver)
+                status_option = ["on","off"]
+                if status not in status_option:
+                    message_input.send_keys(f"@{user_tag_name} PVP模式需為 on or off")
+                    message_input.send_keys(Keys.RETURN)
+                    continue
+                if check_user_has_job(user_tag_name) is False:
+                    message_input.send_keys(f"@{user_tag_name} 請先完成轉職")
+                    message_input.send_keys(Keys.RETURN)
+                    continue
+                db.update_user_pvp_status(user_tag_name, status)
+                message_input.send_keys(f"@{user_tag_name} 已將PVP模式設為 {status}")
+                message_input.send_keys(Keys.RETURN)
+
+            elif message_text == "!決鬥":
+                user_tag_name = get_message_tag_name(driver,message)
+                if user_tag_name is None:
+                    serial_number,user_tag_name = get_original_poster_tag_name(driver)
+                if user_tag_name is None:
+                    continue     
+                user_record_exist = db.check_record_exists("user","user_id",user_tag_name)
+                if not user_record_exist:
+                    db.log_user_info(user_tag_name,"TBD")
+                    message_input.send_keys(f" @{user_tag_name} 尚未完成註冊，請洽管理員")
+                
+                latest_created_time = db.get_latest_pvp_created_time(user_tag_name)
+                created_time = datetime.strptime(str(latest_created_time), "%Y-%m-%d %H:%M:%S")
+                now = datetime.now()
+                time_difference = now - created_time
+                cool_down_minutes =  timedelta(minutes=30)
+                if time_difference < cool_down_minutes and latest_created_time is not None:
+                    message_input.send_keys(f"@{user_tag_name} 現在還在決鬥CD時間，已經過了 {time_difference} ，CD是30分鐘")
+                    message_input.send_keys(Keys.RETURN)
+                    continue
+                if check_user_has_job(user_tag_name) is False:
+                    message_input.send_keys(f"@{user_tag_name} 請先完成轉職")
+                    message_input.send_keys(Keys.RETURN)
+                    continue
+                db.update_user_pvp_status(user_tag_name, 'on')
+                opponent_id = db.get_random_pvp_opponent(user_tag_name)
+                if check_user_has_job(opponent_id) is False:
+                    continue
+                result = calculate_pvp_duel_result(opponent_id,user_tag_name)
+                if result :
+                    user_obj = result[0]
+                    opponent_obj = result[1]
+                    duel_info = result[2]
+                else:
+                    continue
+                if duel_info["fair"] is True:
+                    message_input.send_keys(f"此次決鬥的結果為 : LV: {opponent_obj.lv} Job: {duel_info["opponent_job"]} @{opponent_id} 與 LV: {user_obj.lv} Job: {duel_info["user_job"]} @{user_tag_name} 平手 !")
+                    message_input.send_keys(Keys.SHIFT,Keys.RETURN)
+                    message_input.send_keys(f"@{user_tag_name} 獲得了 {duel_info["user_job_exp"]} exp，@{opponent_id} 獲得 {duel_info["opponent_job_exp"]} exp")
+               
+                elif duel_info["win"] == user_tag_name:
+                    message_input.send_keys(f"此次決鬥的結果為 : LV: {user_obj.lv} Job: {duel_info["user_job"]} @{user_tag_name}  擊敗了 LV: {opponent_obj.lv} Job: {duel_info["opponent_job"]} @{opponent_id} ")
+                    message_input.send_keys(Keys.SHIFT,Keys.RETURN)
+                    message_input.send_keys(f"獲勝方獲得 {duel_info["user_job_exp"]} exp ，落敗方失去 {duel_info["opponent_job_exp"]} exp")
+                    message_input.send_keys(Keys.SHIFT,Keys.RETURN)
+                    if duel_info["user_effect_triggered"] is not None:
+                        message_input.send_keys(f"獲勝方 {duel_info["user_effect_triggered"]}")
+                        message_input.send_keys(Keys.SHIFT,Keys.RETURN)
+                    if duel_info["opponent_effect_triggered"] is not None:
+                        message_input.send_keys(f"落敗方 {duel_info["opponent_effect_triggered"]}")
+                        message_input.send_keys(Keys.SHIFT,Keys.RETURN)
+                elif duel_info["win"] == opponent_id:
+                    message_input.send_keys(f"此次決鬥的結果為 : LV: {opponent_obj.lv} Job: {duel_info["opponent_job"]} @{opponent_id} 擊敗了 LV: {user_obj.lv} Job: {duel_info["user_job"]} @{user_tag_name} ")
+                    message_input.send_keys(Keys.SHIFT,Keys.RETURN)
+                    message_input.send_keys(f"獲勝方獲得 {duel_info["opponent_job_exp"]} exp，落敗方失去 {duel_info["user_job_exp"]} exp")
+                    if duel_info["opponent_effect_triggered"] is not None:
+                        message_input.send_keys(f"獲勝方 {duel_info["opponent_effect_triggered"]}")
+                    if duel_info["user_effect_triggered"] is not None:
+                        message_input.send_keys(f"落敗方 {duel_info["user_effect_triggered"]}")
+                message_input.send_keys(Keys.RETURN)
 
             elif message_text == "!打怪":
                 user_tag_name = get_message_tag_name(driver,message)
@@ -586,15 +1020,18 @@ def main():
                 random_monster = random.choice(monsters)
                 random_monster_lv = monster_config[random_monster]["LV"]
                 random_monster_exp = monster_config[random_monster]["EXP"]
+                current_exp, current_level = db.get_user_current_exp_level(user_tag_name)
                 win_or_lose, gain_exp = calculate_win_or_lose_exp(user_tag_name,random_monster_lv,random_monster_exp)
                 db.log_user_battle_pve(user_tag_name,random_monster,win_or_lose,gain_exp)
                 if win_or_lose == "win":
-                    db.update_user_exp(gain_exp,user_tag_name)
+                    calculate_level_exp(user_tag_name,current_level,current_exp,random_monster_exp)
                     message_input.send_keys(f"@{user_tag_name} 您擊倒了 LV {random_monster_lv} 的 {random_monster}，並獲得了 {gain_exp} 經驗值 ")
                     message_input.send_keys(Keys.RETURN)
                 elif win_or_lose == "lose":
-                    
-                    db.update_user_minus_exp(gain_exp,user_tag_name)
+                    if current_exp - gain_exp < 0:
+                        db.update_user_exp(0,user_tag_name)
+                    else:
+                        db.update_user_minus_exp(gain_exp,user_tag_name)
                     if random_monster == "比愛心的呂小弟":
                         image_path = os.path.join("idol_image", "比愛心的呂小弟.JPG")
                         relative_path = image_path
@@ -623,8 +1060,16 @@ def main():
                 if user_tag_name is None:
                     serial_number,user_tag_name = get_original_poster_tag_name(driver)
                 current_exp,current_level = db.get_user_current_exp_level(user_tag_name)
-                
-                message_input.send_keys(f"@{user_tag_name}  目前獲取經驗值 : {current_exp}，等級 : {current_level}")
+                current_gain_exp = db.get_user_current_gain_exp(user_tag_name)
+                current_job = db.get_user_job(user_tag_name)
+                win_streak = db.get_user_pvp_win_streak(user_tag_name)
+                lose_streak = db.get_user_pvp_lose_streak(user_tag_name)
+                exp_threshold = get_exp_threshold(current_level)
+                message_input.send_keys(f"@{user_tag_name}  目前獲取經驗值 / 升級所需經驗值 : {current_exp} / {exp_threshold}，等級 : {current_level}")
+                message_input.send_keys(Keys.SHIFT,Keys.RETURN)
+                message_input.send_keys(f"職業 : {current_job}  目前發言可獲得經驗值 : {current_gain_exp}")
+                message_input.send_keys(Keys.SHIFT,Keys.RETURN)
+                message_input.send_keys(f"連勝 : {win_streak}  連敗 : {lose_streak}")
                 message_input.send_keys(Keys.RETURN)
 
             elif message_text == "!魯王":
@@ -876,4 +1321,5 @@ def main():
 
 
 if __name__ == '__main__':
+
     main()

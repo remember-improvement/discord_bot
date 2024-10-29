@@ -37,7 +37,17 @@ def reset_to_default():
         if time_difference >= reset_hours:
             db.update_user_current_gain_exp_to_default(result[0])
             print(f"Update {result[0]} current gain exp to default")
+def insert_new_user():
+    db.insert_new_user_to_user_level_table()
+    print("insert new user")
+
+def update_custom_user_name():
+    db.update_custom_user_name_in_user_level_table()
+    print("update custom user name")
+
 schedule.every(10).minutes.do(reset_to_default)
+schedule.every(24).hours.do(insert_new_user)
+schedule.every(60).minutes.do(update_custom_user_name)
 
 # Keeps the scheduler running
 while True:
