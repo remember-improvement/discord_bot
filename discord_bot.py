@@ -414,8 +414,7 @@ def driver_set_up_login(email,password):
     chrome_options.add_argument(f"--user-agent={user_agent}")
     chrome_prefs = {"intl.accept_languages": "en-US"}
     chrome_options.add_experimental_option("prefs", chrome_prefs)
-    service = Service("chromedriver.exe")
-    driver = webdriver.Chrome(service=service, options=chrome_options)
+    driver = webdriver.Chrome(options=chrome_options)
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": """
             Object.defineProperty(navigator, 'webdriver', {

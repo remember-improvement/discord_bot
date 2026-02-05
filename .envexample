@@ -7,3 +7,7 @@ db_host =
 db_user = 
 db_password = 
 db_name = 
+spotify_client_id =
+spotify_client_secret = 
+line_channel_access_token = 
+group_id = 

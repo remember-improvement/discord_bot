@@ -123,9 +123,13 @@ def main():
             navigate_to_unread_thread(driver)
             sleep(1)
             message_content = ""
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.XPATH, "//ol[@data-list-id='chat-messages']"))
-            )
+            print("show message")
+            WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located((
+                         By.XPATH,
+                        "//li[starts-with(@id,'chat-messages')]"
+                    ))
+)
             try:
                 # Increased the wait time to 10 seconds
                 thread_element = WebDriverWait(driver, 10).until(
